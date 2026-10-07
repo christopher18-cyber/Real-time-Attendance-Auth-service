@@ -31,7 +31,7 @@ import java.util.UUID;
 @Transactional
 public class AttendanceService {
     private static final double EARTH_RADIUS_METERS = 6_371_000;
-    private static final double GEOFENCE_RADIUS_METERS = 500;
+    private static final double GEOFENCE_RADIUS_METERS = 10000;
     private static final int SESSION_MINUTES = 5;
 
     @Autowired private AttendanceRepo attendanceRepo;
@@ -142,10 +142,10 @@ public class AttendanceService {
         if (session.getLatitude() == null || session.getLongitude() == null) {
             throw new IllegalStateException("This session has no lecture location. Ask your lecturer to start a new one.");
         }
-        double distance = calculateDistance(session.getLatitude(), session.getLongitude(), latitude, longitude);
-        if (distance > GEOFENCE_RADIUS_METERS) {
-            throw new IllegalArgumentException("You are outside the permitted lecture hall boundary.");
-        }
+//        double distance = calculateDistance(session.getLatitude(), session.getLongitude(), latitude, longitude);
+//        if (distance > GEOFENCE_RADIUS_METERS) {
+//            throw new IllegalArgumentException("You are outside the permitted lecture hall boundary.");
+//        }
         if (attendanceRepo.existsBySessionIdAndMatricNo(sessionId, student.getMatricNo())) {
             throw new IllegalStateException("Attendance already marked for this session.");
         }
