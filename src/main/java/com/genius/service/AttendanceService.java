@@ -73,6 +73,12 @@ public class AttendanceService {
         return sessionRepo.save(session);
     }
 
+    public AttendanceSession startSessionById(Long courseId, User lecturer, double latitude, double longitude) {
+        Course course = courseRepo.findById(courseId)
+                .orElseThrow(() -> new IllegalArgumentException("Course not found."));
+        return startSession(course.getCourseCode(), lecturer, latitude, longitude);
+    }
+
     public AttendanceSession closeSession(Long sessionId, User lecturer) {
         AttendanceSession session = sessionRepo.findById(sessionId)
                 .orElseThrow(() -> new IllegalArgumentException("Session not found."));
@@ -175,7 +181,7 @@ public class AttendanceService {
         String status = session.getStatus() == AttendanceSession.SessionStatus.ACTIVE &&
                 LocalDateTime.now().isAfter(session.getExpiresAt()) ? "EXPIRED" : session.getStatus().name();
         Attendance mine = lecturer ? null : records.stream()
-                .filter(record -> record.getUser().getId().equals(user.getId())).findFirst().orElse(null);
+                                            .filter(record -> record.getUser().getId().equals(user.getId())).findFirst().orElse(null);
         return new SessionView(session.getId(), course.getId(), course.getCourseCode(),
                 utc(session.getCreatedAt()), utc(session.getExpiresAt()), status,
                 lecturer ? session.getSessionCode() : null,

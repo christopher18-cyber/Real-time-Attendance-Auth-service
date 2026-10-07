@@ -27,8 +27,17 @@ public class AttendanceController {
             User lecturer = authService.getUserByEmailOrUsername(principal.getName());
             double latitude = Double.parseDouble(String.valueOf(payload.get("latitude")));
             double longitude = Double.parseDouble(String.valueOf(payload.get("longitude")));
-            AttendanceSession session = attendanceService.startSession((String) payload.get("courseCode"),
-                    lecturer, latitude, longitude);
+
+            AttendanceSession session;
+            if (payload.containsKey("courseCode") && payload.get("courseCode") != null) {
+                session = attendanceService.startSession((String) payload.get("courseCode"), lecturer, latitude, longitude);
+            } else if (payload.containsKey("courseId") && payload.get("courseId") != null) {
+                Long courseId = Long.parseLong(String.valueOf(payload.get("courseId")));
+                session = attendanceService.startSessionById(courseId, lecturer, latitude, longitude);
+            } else {
+                throw new IllegalArgumentException("Course code or course ID is required.");
+            }
+
             return ResponseEntity.ok(attendanceService.getSession(session.getId(), lecturer));
         } catch (Exception e) {
             return error(e);
@@ -106,7 +115,7 @@ public class AttendanceController {
         HttpStatus status = e instanceof ResponseStatusException response
                 ? HttpStatus.valueOf(response.getStatusCode().value())
                 : e instanceof IllegalStateException ? HttpStatus.CONFLICT
-                : e instanceof IllegalArgumentException ? HttpStatus.BAD_REQUEST : HttpStatus.INTERNAL_SERVER_ERROR;
+                  : e instanceof IllegalArgumentException ? HttpStatus.BAD_REQUEST : HttpStatus.INTERNAL_SERVER_ERROR;
         String message = e instanceof ResponseStatusException response ? response.getReason() : e.getMessage();
         return ResponseEntity.status(status).body(Map.of("code", status.name(),
                 "message", message == null ? "Request failed." : message, "details", Map.of()));
