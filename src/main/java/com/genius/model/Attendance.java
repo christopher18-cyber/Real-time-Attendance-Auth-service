@@ -13,14 +13,14 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 @NoArgsConstructor
 @Table(name = "attendance_records", uniqueConstraints =
-@UniqueConstraint(name = "uq_attendance_session_user", columnNames = {"session_id", "user_id"}))
+@UniqueConstraint(name = "uq_attendance_session_user", columnNames = {"session_id", "student_id"}))
 public class Attendance {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "user_id", nullable = false)
+    @JoinColumn(name = "student_id", nullable = false)
     private User user;
 
     @Column(nullable = false)
