@@ -6,7 +6,6 @@ import com.genius.model.User;
 import com.genius.security.JwtTokenProvider;
 import com.genius.service.AuthService;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -120,6 +119,7 @@ public class AuthController {
 
             return ResponseEntity.ok(Map.of(
                     "id", user.getId(),
+                    "fullName", user.getFullName(),
                     "email", user.getEmail(),
                     "username", user.getUsername(),
                     "role", user.getRole(),

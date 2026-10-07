@@ -9,6 +9,7 @@ import jakarta.transaction.Transactional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import tools.jackson.databind.ObjectMapper;
 
 
 @Service
@@ -21,6 +22,7 @@ public class AuthService {
     private PasswordEncoder passwordEncoder;
     @Autowired
     private EmailService emailService;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public User registerUser(RegisterRequest request){
         if(userRepo.existsByEmail(request.getEmail())){
@@ -60,7 +62,7 @@ public class AuthService {
         user.setMatricNo(request.getMatricNo());
         user.setPassword(passwordEncoder.encode(request.getPassword()));
         user.setRole(request.getRole());
-        user.setFacialEmbedding(request.getFacialEmbedding());
+        user.setFacialEmbedding(null);
 
         user.setEmailVerified(false);
         String verificationToken = String.format("%06d", new java.security.SecureRandom().nextInt(900000) + 100000);
@@ -81,6 +83,10 @@ public class AuthService {
 
         if(!passwordEncoder.matches(password,user.getPassword())){
             throw new RuntimeException("Error: Invalid username/email or password");
+        }
+
+        if (!user.isEmailVerified()) {
+            throw new RuntimeException("Verify your email before signing in.");
         }
 
         return user;
@@ -130,6 +136,23 @@ public class AuthService {
 
         if (user.getRole() != Role.STUDENT) {
             throw new RuntimeException("Facial onboarding is only available for students.");
+        }
+
+        if (!user.isEmailVerified()) {
+            throw new RuntimeException("Verify your email before facial onboarding.");
+        }
+
+        try {
+            double[] descriptor = objectMapper.readValue(facialEmbeddingJson, double[].class);
+            if (descriptor.length != 128) throw new IllegalArgumentException();
+            double norm = 0;
+            for (double value : descriptor) {
+                if (!Double.isFinite(value)) throw new IllegalArgumentException();
+                norm += value * value;
+            }
+            if (norm == 0 || !Double.isFinite(norm)) throw new IllegalArgumentException();
+        } catch (Exception e) {
+            throw new IllegalArgumentException("A valid 128-value face descriptor is required.");
         }
 
         user.setFacialEmbedding(facialEmbeddingJson);

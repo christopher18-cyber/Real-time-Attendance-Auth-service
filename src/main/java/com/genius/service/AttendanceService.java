@@ -1,224 +1,256 @@
 package com.genius.service;
 
-import com.genius.model.*;
-import com.genius.repo.*;
-import tools.jackson.databind.ObjectMapper;
+import com.genius.dto.CourseView;
+import com.genius.dto.SessionView;
+import com.genius.model.Attendance;
+import com.genius.model.AttendanceSession;
+import com.genius.model.Course;
+import com.genius.model.CourseRoster;
+import com.genius.model.Role;
+import com.genius.model.User;
+import com.genius.repo.AttendanceRepo;
+import com.genius.repo.AttendanceSessionRepository;
+import com.genius.repo.CourseRepository;
+import com.genius.repo.CourseRosterRepository;
 import jakarta.transaction.Transactional;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.http.HttpStatus;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 
 @Service
 @Transactional
 public class AttendanceService {
+    private static final double EARTH_RADIUS_METERS = 6_371_000;
+    private static final double GEOFENCE_RADIUS_METERS = 100;
+    private static final int SESSION_MINUTES = 5;
 
-    @Autowired
-    private AttendanceRepo attendanceRepo;
-
-    @Autowired
-    private AttendanceSessionRepository sessionRepo;
-
-    @Autowired
-    private UserRepository userRepo;
-
-    @Autowired
-    private CourseRepository courseRepo;
-
-    @Autowired
-    private CourseRosterRepository rosterRepo;
+    @Autowired private AttendanceRepo attendanceRepo;
+    @Autowired private AttendanceSessionRepository sessionRepo;
+    @Autowired private CourseRepository courseRepo;
+    @Autowired private CourseRosterRepository rosterRepo;
+    @Autowired private CourseService courseService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
-    private static final double EARTH_RADIUS_METERS = 6371000;
 
-    // 1. Lecturer Starts an Attendance Session (with Geofencing coordinates)
-    public AttendanceSession startSession(String courseCode, Long lecturerId, int durationMinutes, Double latitude, Double longitude) {
-        String upperCode = courseCode.toUpperCase();
-        Course course = courseRepo.findByCourseCode(upperCode)
-                .orElseThrow(() -> new RuntimeException("Course not found"));
-
+    public AttendanceSession startSession(String courseCode, User lecturer, double latitude, double longitude) {
+        if (courseCode == null || courseCode.isBlank()) throw new IllegalArgumentException("Course code is required.");
+        validateCoordinates(latitude, longitude);
+        Course course = courseRepo.findByCourseCode(courseCode.trim().toUpperCase(Locale.ROOT))
+                .orElseThrow(() -> new IllegalArgumentException("Course not found."));
+        courseService.requireManager(course, lecturer);
         if (course.getStatus() != Course.CourseStatus.ACTIVE) {
-            throw new RuntimeException("Cannot start attendance for an inactive or draft course.");
+            throw new IllegalArgumentException("Confirm the course roster before starting attendance.");
         }
-
-        String sessionCode = UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+        LocalDateTime now = LocalDateTime.now();
+        if (!sessionRepo.findByCourseCodeAndStatusAndExpiresAtAfter(course.getCourseCode(),
+                AttendanceSession.SessionStatus.ACTIVE, now).isEmpty()) {
+            throw new IllegalStateException("This course already has an active attendance session.");
+        }
+        List<CourseView.RosterEntry> roster = rosterRepo.findByCourseCodeAndConfirmed(course.getCourseCode(), true)
+                .stream().map(CourseView.RosterEntry::from).toList();
+        if (roster.isEmpty()) throw new IllegalArgumentException("This course has no confirmed students.");
 
         AttendanceSession session = new AttendanceSession();
-        session.setCourseCode(upperCode);
-        session.setSessionCode(sessionCode);
-        session.setLecturerId(lecturerId);
+        session.setCourseCode(course.getCourseCode());
+        session.setSessionCode(UUID.randomUUID().toString().substring(0, 6).toUpperCase(Locale.ROOT));
+        session.setLecturerId(lecturer.getId());
         session.setStatus(AttendanceSession.SessionStatus.ACTIVE);
-        session.setCreatedAt(LocalDateTime.now());
-        session.setExpiresAt(LocalDateTime.now().plusMinutes(durationMinutes));
+        session.setCreatedAt(now);
+        session.setExpiresAt(now.plusMinutes(SESSION_MINUTES));
         session.setLatitude(latitude);
         session.setLongitude(longitude);
-
+        session.setRosterSnapshotJson(objectMapper.writeValueAsString(roster));
         return sessionRepo.save(session);
     }
 
-    // Overload for legacy payloads lacking coordinates
-    public AttendanceSession startSession(String courseCode, Long lecturerId, int durationMinutes) {
-        return startSession(courseCode, lecturerId, durationMinutes, null, null);
-    }
-
-    // 2. Lecturer Closes a Session
-    public AttendanceSession closeSession(Long sessionId) {
+    public AttendanceSession closeSession(Long sessionId, User lecturer) {
         AttendanceSession session = sessionRepo.findById(sessionId)
-                .orElseThrow(() -> new RuntimeException("Session not found"));
+                .orElseThrow(() -> new IllegalArgumentException("Session not found."));
+        courseService.requireManager(courseFor(session), lecturer);
         session.setStatus(AttendanceSession.SessionStatus.CLOSED);
         return sessionRepo.save(session);
     }
 
-    // 3. Legacy Facial Verification (Username-based)
-    public Attendance verifyAndRecordAttendanceLegacy(String sessionCode, String username, String liveEmbeddingJson) {
-        AttendanceSession session = sessionRepo.findBySessionCode(sessionCode.toUpperCase())
-                .orElseThrow(() -> new RuntimeException("Error: Invalid attendance session code."));
-
-        validateSessionState(session);
-
-        User user = userRepo.findByUsername(username)
-                .orElseThrow(() -> new RuntimeException("User not found"));
-
-        return processAttendanceRecord(session, user, liveEmbeddingJson);
+    public List<SessionView> getActiveSessions(User user) {
+        return sessionRepo.findByStatusAndExpiresAtAfter(AttendanceSession.SessionStatus.ACTIVE, LocalDateTime.now())
+                .stream().filter(session -> canView(session, user)).map(session -> view(session, user)).toList();
     }
 
-    // 4. Secure Session ID Check-in Method with Geofence & Facial Verification
-    public Attendance verifyAndRecordAttendanceById(Long sessionId, String userEmail, String code, double latitude, double longitude, String liveEmbeddingJson) {
+    public List<SessionView> getSessionHistory(User user) {
+        return sessionRepo.findAllByOrderByCreatedAtDesc().stream()
+                .filter(session -> session.getStatus() == AttendanceSession.SessionStatus.CLOSED ||
+                        session.getExpiresAt() != null && !LocalDateTime.now().isBefore(session.getExpiresAt()))
+                .filter(session -> canView(session, user)).map(session -> view(session, user)).toList();
+    }
+
+    public SessionView getReportSession(Long sessionId, User lecturer) {
         AttendanceSession session = sessionRepo.findById(sessionId)
-                .orElseThrow(() -> new RuntimeException("Error: Attendance session not found."));
+                .orElseThrow(() -> new IllegalArgumentException("Session not found."));
+        courseService.requireManager(courseFor(session), lecturer);
+        if (session.getStatus() == AttendanceSession.SessionStatus.ACTIVE &&
+                LocalDateTime.now().isBefore(session.getExpiresAt())) {
+            throw new IllegalStateException("End attendance before downloading the report.");
+        }
+        return view(session, lecturer);
+    }
 
+    public SessionView getSession(Long sessionId, User user) {
+        AttendanceSession session = sessionRepo.findById(sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("Session not found."));
+        if (!canView(session, user)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Session access denied.");
+        return view(session, user);
+    }
+
+    public List<SessionView.CheckInView> getSessionRecords(Long sessionId, User lecturer) {
+        AttendanceSession session = sessionRepo.findById(sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("Session not found."));
+        courseService.requireManager(courseFor(session), lecturer);
+        return attendanceRepo.findBySessionId(sessionId).stream().map(this::checkInView).toList();
+    }
+
+    public Attendance checkIn(Long sessionId, User student, String code,
+                              double latitude, double longitude, String liveEmbeddingJson) {
+        AttendanceSession session = sessionRepo.findById(sessionId)
+                .orElseThrow(() -> new IllegalArgumentException("Attendance session not found."));
         validateSessionState(session);
-
+        if (student.getRole() != Role.STUDENT || !student.isEmailVerified()) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Verified student access required.");
+        }
         if (code == null || !session.getSessionCode().equalsIgnoreCase(code.trim())) {
-            throw new RuntimeException("Error: Invalid attendance session code.");
+            throw new IllegalArgumentException("Invalid attendance session code.");
         }
-
-        // Validate Geofence (100-meter radius check)
-        if (session.getLatitude() != null && session.getLongitude() != null) {
-            double distance = calculateDistance(session.getLatitude(), session.getLongitude(), latitude, longitude);
-            double allowedRadiusMeters = 100.0;
-
-            if (distance > allowedRadiusMeters) {
-                throw new RuntimeException("Geofence validation failed: You are " + Math.round(distance) + "m away from the lecture venue.");
-            }
+        if (!isInSnapshot(session, student)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You are not on this session's roster.");
         }
-
-        // Fetch user securely via the JWT email principal
-        User user = userRepo.findByEmail(userEmail)
-                .orElseThrow(() -> new RuntimeException("User not found"));
-
-        return processAttendanceRecord(session, user, liveEmbeddingJson);
-    }
-
-    // Helper to validate time window and closed status
-    private void validateSessionState(AttendanceSession session) {
-        if (session.getStatus() != AttendanceSession.SessionStatus.ACTIVE) {
-            throw new RuntimeException("Error: This attendance session has been closed.");
+        validateCoordinates(latitude, longitude);
+        if (session.getLatitude() == null || session.getLongitude() == null) {
+            throw new IllegalStateException("This session has no lecture location. Ask your lecturer to start a new one.");
         }
-
-        LocalDateTime now = LocalDateTime.now();
-        if (session.getExpiresAt() != null && now.isAfter(session.getExpiresAt())) {
-            session.setStatus(AttendanceSession.SessionStatus.CLOSED);
-            sessionRepo.save(session);
-            throw new RuntimeException("Error: This attendance session has expired.");
+        double distance = calculateDistance(session.getLatitude(), session.getLongitude(), latitude, longitude);
+        if (distance > GEOFENCE_RADIUS_METERS) {
+            throw new IllegalArgumentException("You are outside the permitted lecture hall boundary.");
         }
-        if (now.isBefore(session.getCreatedAt())) {
-            throw new RuntimeException("Error: Attendance session has not started yet.");
+        if (attendanceRepo.existsBySessionIdAndMatricNo(sessionId, student.getMatricNo())) {
+            throw new IllegalStateException("Attendance already marked for this session.");
         }
-    }
-
-    // Shared internal helper to enforce roster, duplicate checks, and face verification
-    private Attendance processAttendanceRecord(AttendanceSession session, User user, String liveEmbeddingJson) {
-        if (user.getRole() != Role.STUDENT) {
-            throw new RuntimeException("Access denied: Facial verification is restricted to students.");
-        }
-
-        if (user.getMatricNo() == null || user.getMatricNo().trim().isEmpty()) {
-            throw new RuntimeException("Student profile is missing a matriculation number.");
-        }
-
-        if (user.getFacialEmbedding() == null || user.getFacialEmbedding().isEmpty()) {
-            throw new RuntimeException("No facial embedding registered for this student.");
-        }
-
-        boolean isEnrolled = rosterRepo.existsByCourseCodeAndMatricNo(session.getCourseCode(), user.getMatricNo());
-        if (!isEnrolled) {
-            throw new RuntimeException("Error: You are not registered on the official roster for " + session.getCourseCode() + ".");
-        }
-
-        boolean alreadyCheckedIn = attendanceRepo.existsBySessionIdAndMatricNo(session.getId(), user.getMatricNo());
-        if (alreadyCheckedIn) {
-            throw new RuntimeException("Attendance already marked for this session.");
-        }
-
-        boolean isMatch = compareEmbeddings(user.getFacialEmbedding(), liveEmbeddingJson);
-        if (!isMatch) {
-            throw new RuntimeException("Face mismatch. Verification failed.");
+        if (student.getFacialEmbedding() == null || !compareEmbeddings(student.getFacialEmbedding(), liveEmbeddingJson)) {
+            throw new IllegalArgumentException("Face verification failed.");
         }
 
         Attendance attendance = new Attendance();
-        attendance.setUser(user);
-        attendance.setMatricNo(user.getMatricNo());
+        attendance.setUser(student);
+        attendance.setMatricNo(student.getMatricNo());
         attendance.setCourseCode(session.getCourseCode());
-        attendance.setSessionId(session.getId());
+        attendance.setSessionId(sessionId);
         attendance.setDate(LocalDate.now());
         attendance.setTimestamp(LocalDateTime.now());
         attendance.setStatus("PRESENT");
-
         return attendanceRepo.save(attendance);
     }
 
-    // Fetch records for a session (Lecturer view)
-    public List<Attendance> getSessionRecords(Long sessionId) {
-        return attendanceRepo.findBySessionId(sessionId);
+    public List<CourseView.RosterEntry> snapshot(AttendanceSession session) {
+        if (session.getRosterSnapshotJson() == null) return List.of();
+        try {
+            return Arrays.asList(objectMapper.readValue(session.getRosterSnapshotJson(), CourseView.RosterEntry[].class));
+        } catch (Exception e) {
+            throw new IllegalStateException("Session roster snapshot is invalid.");
+        }
     }
 
-    // Cosine Similarity Algorithm
-    private boolean compareEmbeddings(String storedEmbeddingJson, String liveEmbeddingJson) {
+    private SessionView view(AttendanceSession session, User user) {
+        Course course = courseFor(session);
+        boolean lecturer = courseService.canManage(course, user);
+        List<Attendance> records = attendanceRepo.findBySessionId(session.getId());
+        List<CourseView.RosterEntry> roster = snapshot(session);
+        String status = session.getStatus() == AttendanceSession.SessionStatus.ACTIVE &&
+                LocalDateTime.now().isAfter(session.getExpiresAt()) ? "EXPIRED" : session.getStatus().name();
+        Attendance mine = lecturer ? null : records.stream()
+                .filter(record -> record.getUser().getId().equals(user.getId())).findFirst().orElse(null);
+        return new SessionView(session.getId(), course.getId(), course.getCourseCode(),
+                utc(session.getCreatedAt()), utc(session.getExpiresAt()), status,
+                lecturer ? session.getSessionCode() : null,
+                lecturer ? session.getLatitude() : null, lecturer ? session.getLongitude() : null,
+                roster.size(), records.size(),
+                lecturer ? records.stream().map(this::checkInView).toList() : List.of(),
+                lecturer ? roster : List.of(),
+                lecturer ? null : mine == null ? "ABSENT" : "PRESENT",
+                mine == null ? null : utc(mine.getTimestamp()));
+    }
+
+    private SessionView.CheckInView checkInView(Attendance record) {
+        User student = record.getUser();
+        return new SessionView.CheckInView(String.valueOf(student.getId()), student.getFullName(),
+                student.getEmail(), record.getMatricNo(), utc(record.getTimestamp()));
+    }
+
+    private boolean canView(AttendanceSession session, User user) {
+        if (user == null || !user.isEmailVerified()) return false;
+        Course course = courseFor(session);
+        return courseService.canManage(course, user) || isInSnapshot(session, user);
+    }
+
+    private boolean isInSnapshot(AttendanceSession session, User user) {
+        return user != null && user.getRole() == Role.STUDENT && user.isEmailVerified() &&
+                user.getMatricNo() != null && snapshot(session).stream().anyMatch(row ->
+                row.email().equalsIgnoreCase(user.getEmail()) && row.matricNo().equalsIgnoreCase(user.getMatricNo()));
+    }
+
+    private Course courseFor(AttendanceSession session) {
+        return courseRepo.findByCourseCode(session.getCourseCode())
+                .orElseThrow(() -> new IllegalStateException("The session's course no longer exists."));
+    }
+
+    private void validateSessionState(AttendanceSession session) {
+        if (session.getStatus() != AttendanceSession.SessionStatus.ACTIVE ||
+                LocalDateTime.now().isAfter(session.getExpiresAt())) {
+            throw new IllegalStateException("This attendance session has ended.");
+        }
+    }
+
+    private void validateCoordinates(double latitude, double longitude) {
+        if (!Double.isFinite(latitude) || !Double.isFinite(longitude) || Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
+            throw new IllegalArgumentException("Valid latitude and longitude are required.");
+        }
+    }
+
+    private boolean compareEmbeddings(String storedJson, String liveJson) {
         try {
-            double[] stored = objectMapper.readValue(storedEmbeddingJson, double[].class);
-            double[] live = objectMapper.readValue(liveEmbeddingJson, double[].class);
-            if (stored.length != live.length) {
-                return false;
+            double[] stored = objectMapper.readValue(storedJson, double[].class);
+            double[] live = objectMapper.readValue(liveJson, double[].class);
+            if (stored.length != 128 || live.length != 128) return false;
+            double dot = 0, storedNorm = 0, liveNorm = 0;
+            for (int i = 0; i < 128; i++) {
+                if (!Double.isFinite(stored[i]) || !Double.isFinite(live[i])) return false;
+                dot += stored[i] * live[i];
+                storedNorm += stored[i] * stored[i];
+                liveNorm += live[i] * live[i];
             }
-
-            double dotProduct = 0.0;
-            double normA = 0.0;
-            double normB = 0.0;
-
-            for (int i = 0; i < stored.length; i++) {
-                dotProduct += stored[i] * live[i];
-                normA += Math.pow(stored[i], 2);
-                normB += Math.pow(live[i], 2);
-            }
-
-            if (normA == 0 || normB == 0) {
-                return false;
-            }
-
-            double similarity = dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-            double threshold = 0.65;
-
-            return similarity >= threshold;
+            return storedNorm > 0 && liveNorm > 0 &&
+                    dot / Math.sqrt(storedNorm * liveNorm) >= 0.65;
         } catch (Exception e) {
             return false;
         }
     }
 
-    // Haversine Distance Calculator
-    public double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    private double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
         double dLat = Math.toRadians(lat2 - lat1);
         double dLon = Math.toRadians(lon2 - lon1);
+        double a = Math.pow(Math.sin(dLat / 2), 2) + Math.cos(Math.toRadians(lat1)) *
+                Math.cos(Math.toRadians(lat2)) * Math.pow(Math.sin(dLon / 2), 2);
+        return 2 * EARTH_RADIUS_METERS * Math.atan2(Math.sqrt(a), Math.sqrt(Math.max(0, 1 - a)));
+    }
 
-        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-                Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2)) *
-                        Math.sin(dLon / 2) * Math.sin(dLon / 2);
-
-        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-        return EARTH_RADIUS_METERS * c;
+    private String utc(LocalDateTime value) {
+        return value.atZone(ZoneId.systemDefault()).toInstant().toString();
     }
 }

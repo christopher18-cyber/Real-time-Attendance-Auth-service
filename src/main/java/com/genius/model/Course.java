@@ -3,6 +3,8 @@ package com.genius.model;
 import jakarta.persistence.*;
 import lombok.Data;
 import java.time.LocalDateTime;
+import java.util.HashSet;
+import java.util.Set;
 
 @Entity
 @Table(name = "courses")
@@ -28,6 +30,14 @@ public class Course {
 
     @Column(nullable = false)
     private Long lecturerId;
+
+    private String room;
+    private String schedule;
+
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "course_supporting_lecturers", joinColumns = @JoinColumn(name = "course_id"))
+    @Column(name = "email", nullable = false)
+    private Set<String> supportingLecturerEmails = new HashSet<>();
 
     private LocalDateTime createdAt = LocalDateTime.now();
 

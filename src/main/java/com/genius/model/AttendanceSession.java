@@ -40,6 +40,9 @@ public class AttendanceSession {
     private Double latitude;
     private Double longitude;
 
+    @Column(columnDefinition = "TEXT")
+    private String rosterSnapshotJson;
+
     public enum SessionStatus {
         ACTIVE, CLOSED
     }

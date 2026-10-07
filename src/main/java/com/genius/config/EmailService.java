@@ -4,6 +4,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.*;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.context.annotation.Profile;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.HttpStatusCodeException;
@@ -16,6 +17,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 @Service
+@Profile("!local")
 public class EmailService {
 
     private static final String TOKEN_URL = "https://oauth2.googleapis.com/token";
