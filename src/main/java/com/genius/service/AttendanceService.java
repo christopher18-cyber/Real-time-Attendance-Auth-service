@@ -31,7 +31,7 @@ import java.util.UUID;
 @Transactional
 public class AttendanceService {
     private static final double EARTH_RADIUS_METERS = 6_371_000;
-    private static final double GEOFENCE_RADIUS_METERS = 100;
+    private static final double GEOFENCE_RADIUS_METERS = 500;
     private static final int SESSION_MINUTES = 5;
 
     @Autowired private AttendanceRepo attendanceRepo;
