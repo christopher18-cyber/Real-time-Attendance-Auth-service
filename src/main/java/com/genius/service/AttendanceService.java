@@ -231,9 +231,16 @@ public class AttendanceService {
 
     private boolean compareEmbeddings(String storedJson, String liveJson) {
         try {
+            if (storedJson == null || liveJson == null) {
+                System.out.println("DEBUG: Stored or live embedding is NULL!");
+                return false;
+            }
             double[] stored = objectMapper.readValue(storedJson, double[].class);
             double[] live = objectMapper.readValue(liveJson, double[].class);
-            if (stored.length != 128 || live.length != 128) return false;
+            if (stored.length != 128 || live.length != 128) {
+                System.out.println("DEBUG: Array length mismatch! Stored: " + stored.length + ", Live: " + live.length);
+                return false;
+            }
             double dot = 0, storedNorm = 0, liveNorm = 0;
             for (int i = 0; i < 128; i++) {
                 if (!Double.isFinite(stored[i]) || !Double.isFinite(live[i])) return false;
@@ -241,9 +248,12 @@ public class AttendanceService {
                 storedNorm += stored[i] * stored[i];
                 liveNorm += live[i] * live[i];
             }
-            return storedNorm > 0 && liveNorm > 0 &&
-                    dot / Math.sqrt(storedNorm * liveNorm) >= 0.65;
+            double similarity = storedNorm > 0 && liveNorm > 0 ? dot / Math.sqrt(storedNorm * liveNorm) : 0;
+            System.out.println("DEBUG: Facial similarity score = " + similarity);
+            return similarity >= 0.65;
         } catch (Exception e) {
+            System.out.println("DEBUG: Exception during embedding comparison: " + e.getMessage());
+            e.printStackTrace();
             return false;
         }
     }
