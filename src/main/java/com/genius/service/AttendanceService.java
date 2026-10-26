@@ -254,7 +254,7 @@ public class AttendanceService {
             System.out.println("DEBUG: Facial Euclidean distance = " + euclideanDistance);
 
             // Threshold: less than 0.55 or 0.6 indicates the same person
-            return euclideanDistance < 0.50; // Stricter threshold
+            return euclideanDistance < 0.45; // Stricter threshold
 
         } catch (Exception e) {
             System.out.println("DEBUG: Exception during embedding comparison: " + e.getMessage());
