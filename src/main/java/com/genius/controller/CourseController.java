@@ -7,6 +7,7 @@ import com.genius.service.AuthService;
 import com.genius.service.CourseService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
@@ -93,6 +94,24 @@ public class CourseController {
             return ResponseEntity.status(e.getStatusCode()).body(Map.of("message", e.getReason()));
         } catch (Exception e) {
             return ResponseEntity.badRequest().body(Map.of("success", false, "message", e.getMessage()));
+        }
+    }
+
+
+    @PostMapping("/{courseCode}/supporters")
+    public ResponseEntity<?> addSupportingLecturer(
+            @PathVariable String courseCode,
+            @RequestBody Map<String, String> request,
+            @AuthenticationPrincipal User lecturer) {
+        try {
+            String email = request.get("email");
+            Course course = courseService.addSupportingEmail(courseCode, email, lecturer);
+            return ResponseEntity.ok(Map.of(
+                    "message", "Supporting lecturer email added successfully!",
+                    "supportingLecturerEmails", course.getSupportingLecturerEmails()
+            ));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
     }
 }

@@ -47,7 +47,7 @@ public class CourseService {
     @Autowired
     private UserRepository userRepo;
 
-    // 1. Lecturer creates course in DRAFT state
+    // 1. Lecturer creates course in DRAFT state (Allows any valid email, registered or not)
     public Course createCourse(String courseCode, String title, String semester, String room, String schedule,
                                List<String> supportingEmails, User lecturer) {
         requireLecturer(lecturer);
@@ -66,12 +66,15 @@ public class CourseService {
         course.setLecturerId(lecturer.getId());
         course.setRoom(room == null ? null : room.trim());
         course.setSchedule(schedule == null ? null : schedule.trim());
+
         Set<String> emails = new HashSet<>();
-        if (supportingEmails != null) for (String email : supportingEmails) {
-            if (email == null || !email.trim().matches("(?i)^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")) {
-                throw new IllegalArgumentException("A supporting lecturer email is invalid.");
+        if (supportingEmails != null) {
+            for (String emailInput : supportingEmails) {
+                if (emailInput == null || !emailInput.trim().matches("(?i)^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")) {
+                    throw new IllegalArgumentException("A supporting lecturer email is invalid.");
+                }
+                emails.add(emailInput.trim().toLowerCase(Locale.ROOT));
             }
-            emails.add(email.trim().toLowerCase(Locale.ROOT));
         }
         course.setSupportingLecturerEmails(emails);
         course.setStatus(Course.CourseStatus.DRAFT);
@@ -152,7 +155,6 @@ public class CourseService {
             return new ArrayList<>();
         }
 
-        // Find confirmed roster entries matching this student's matric number
         List<CourseRoster> rosters = rosterRepo.findByMatricNoAndConfirmed(student.getMatricNo(), true);
         List<Course> activeCourses = new ArrayList<>();
 
@@ -172,6 +174,7 @@ public class CourseService {
         if (user.getRole() == Role.LECTURER) {
             LinkedHashMap<Long, Course> managed = new LinkedHashMap<>();
             courseRepo.findByLecturerId(user.getId()).forEach(course -> managed.put(course.getId(), course));
+            // Automatically picks up courses if the registered email matches the supporting email list
             courseRepo.findSupportingCourses(user.getEmail()).forEach(course -> managed.put(course.getId(), course));
             courses = new ArrayList<>(managed.values());
         } else {
@@ -224,7 +227,6 @@ public class CourseService {
             throw new RuntimeException("You are already on the course roster!");
         }
 
-        // Check if a request already exists
         Optional<CourseAccessRequest> existing = accessRequestRepo.findByCourseCodeAndStudentId(upperCode, studentId);
         if (existing.isPresent()) {
             return existing.get();
@@ -248,14 +250,13 @@ public class CourseService {
             User student = userRepo.findById(request.getStudentId())
                     .orElseThrow(() -> new RuntimeException("Student not found"));
 
-            // Check if already on roster just in case
             if (!rosterRepo.existsByCourseCodeAndMatricNo(request.getCourseCode(), student.getMatricNo())) {
                 CourseRoster roster = new CourseRoster();
                 roster.setCourseCode(request.getCourseCode());
                 roster.setFullName(student.getFullName());
                 roster.setMatricNo(student.getMatricNo());
                 roster.setEmail(student.getEmail());
-                roster.setConfirmed(true); // Automatically confirmed since lecturer approved it
+                roster.setConfirmed(true);
                 rosterRepo.save(roster);
             }
 
@@ -264,5 +265,26 @@ public class CourseService {
             request.setStatus(CourseAccessRequest.RequestStatus.REJECTED);
         }
         accessRequestRepo.save(request);
+    }
+
+
+    // Add a supporting lecturer email post-creation
+    public Course addSupportingEmail(String courseCode, String email, User lecturer) {
+        String upperCode = courseCode.toUpperCase();
+        Course course = courseRepo.findByCourseCode(upperCode)
+                .orElseThrow(() -> new RuntimeException("Course not found"));
+        requireManager(course, lecturer);
+
+        if (email == null || !email.trim().matches("(?i)^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")) {
+            throw new IllegalArgumentException("A supporting lecturer email is invalid.");
+        }
+        String normalizedEmail = email.trim().toLowerCase(Locale.ROOT);
+
+        if (course.getSupportingLecturerEmails().contains(normalizedEmail)) {
+            throw new RuntimeException("This email is already added as a supporter for this course.");
+        }
+
+        course.getSupportingLecturerEmails().add(normalizedEmail);
+        return courseRepo.save(course);
     }
 }

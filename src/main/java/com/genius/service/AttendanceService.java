@@ -250,7 +250,7 @@ public class AttendanceService {
             }
             double similarity = storedNorm > 0 && liveNorm > 0 ? dot / Math.sqrt(storedNorm * liveNorm) : 0;
             System.out.println("DEBUG: Facial similarity score = " + similarity);
-            return similarity >= 0.65;
+            return similarity >= 0.85;
         } catch (Exception e) {
             System.out.println("DEBUG: Exception during embedding comparison: " + e.getMessage());
             e.printStackTrace();
