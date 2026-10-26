@@ -237,27 +237,31 @@ public class AttendanceService {
             }
             double[] stored = objectMapper.readValue(storedJson, double[].class);
             double[] live = objectMapper.readValue(liveJson, double[].class);
+
             if (stored.length != 128 || live.length != 128) {
                 System.out.println("DEBUG: Array length mismatch! Stored: " + stored.length + ", Live: " + live.length);
                 return false;
             }
-            double dot = 0, storedNorm = 0, liveNorm = 0;
+
+            double sumSquaredDiff = 0.0;
             for (int i = 0; i < 128; i++) {
                 if (!Double.isFinite(stored[i]) || !Double.isFinite(live[i])) return false;
-                dot += stored[i] * live[i];
-                storedNorm += stored[i] * stored[i];
-                liveNorm += live[i] * live[i];
+                double diff = stored[i] - live[i];
+                sumSquaredDiff += diff * diff;
             }
-            double similarity = storedNorm > 0 && liveNorm > 0 ? dot / Math.sqrt(storedNorm * liveNorm) : 0;
-            System.out.println("DEBUG: Facial similarity score = " + similarity);
-            return similarity >= 0.85;
+
+            double euclideanDistance = Math.sqrt(sumSquaredDiff);
+            System.out.println("DEBUG: Facial Euclidean distance = " + euclideanDistance);
+
+            // Threshold: less than 0.55 or 0.6 indicates the same person
+            return euclideanDistance < 0.55;
+
         } catch (Exception e) {
             System.out.println("DEBUG: Exception during embedding comparison: " + e.getMessage());
             e.printStackTrace();
             return false;
         }
     }
-
     private double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
         double dLat = Math.toRadians(lat2 - lat1);
         double dLon = Math.toRadians(lon2 - lon1);
